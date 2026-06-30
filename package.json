@@ -2,11 +2,11 @@
   "name": "whatsapp-finance-bot",
   "version": "1.0.0",
   "description": "Bot de WhatsApp para organizar finanzas personales",
-  "main": "src/server.js",
+  "main": "server.js",
   "type": "module",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "start": "node server.js",
+    "dev": "node --watch server.js"
   },
   "dependencies": {
     "express": "^4.19.2",
