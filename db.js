@@ -1,92 +1,100 @@
-import Database from 'better-sqlite3';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const db = new Database(path.join(__dirname, '..', 'finance.db'));
+const DB_PATH = path.join(__dirname, '..', 'finance-data.json');
 
-db.pragma('journal_mode = WAL');
+function loadData() {
+  if (!fs.existsSync(DB_PATH)) {
+    return { transactions: [], budgets: [] };
+  }
+  try {
+    const raw = fs.readFileSync(DB_PATH, 'utf-8');
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error('Error leyendo la base de datos, empezando de cero:', err.message);
+    return { transactions: [], budgets: [] };
+  }
+}
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    phone TEXT NOT NULL,
-    type TEXT NOT NULL CHECK(type IN ('gasto', 'ingreso')),
-    amount REAL NOT NULL,
-    category TEXT NOT NULL,
-    note TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
+function saveData(data) {
+  fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
+}
 
-  CREATE TABLE IF NOT EXISTS budgets (
-    phone TEXT NOT NULL,
-    category TEXT NOT NULL,
-    monthly_limit REAL NOT NULL,
-    PRIMARY KEY (phone, category)
-  );
+function nowISO() {
+  return new Date().toISOString();
+}
 
-  CREATE INDEX IF NOT EXISTS idx_transactions_phone ON transactions(phone);
-  CREATE INDEX IF NOT EXISTS idx_transactions_created ON transactions(created_at);
-`);
+function currentYearMonth() {
+  return new Date().toISOString().slice(0, 7); // "2026-06"
+}
 
 export function addTransaction(phone, type, amount, category, note) {
-  const stmt = db.prepare(`
-    INSERT INTO transactions (phone, type, amount, category, note)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-  return stmt.run(phone, type, amount, category, note || null);
+  const data = loadData();
+  const transaction = {
+    id: Date.now() + Math.random().toString(36).slice(2, 8),
+    phone,
+    type,
+    amount,
+    category,
+    note: note || null,
+    created_at: nowISO()
+  };
+  data.transactions.push(transaction);
+  saveData(data);
+  return transaction;
 }
 
 export function getTransactionsThisMonth(phone) {
-  const stmt = db.prepare(`
-    SELECT * FROM transactions
-    WHERE phone = ?
-      AND strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now')
-    ORDER BY created_at DESC
-  `);
-  return stmt.all(phone);
+  const data = loadData();
+  const ym = currentYearMonth();
+  return data.transactions
+    .filter(t => t.phone === phone && t.created_at.slice(0, 7) === ym)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
 export function getTransactionsByRange(phone, startDate, endDate) {
-  const stmt = db.prepare(`
-    SELECT * FROM transactions
-    WHERE phone = ? AND created_at >= ? AND created_at <= ?
-    ORDER BY created_at DESC
-  `);
-  return stmt.all(phone, startDate, endDate);
+  const data = loadData();
+  return data.transactions
+    .filter(t => t.phone === phone && t.created_at >= startDate && t.created_at <= endDate)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
 }
 
 export function getLastTransactions(phone, limit = 10) {
-  const stmt = db.prepare(`
-    SELECT * FROM transactions
-    WHERE phone = ?
-    ORDER BY created_at DESC
-    LIMIT ?
-  `);
-  return stmt.all(phone, limit);
+  const data = loadData();
+  return data.transactions
+    .filter(t => t.phone === phone)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, limit);
 }
 
 export function deleteLastTransaction(phone) {
-  const last = db.prepare(`
-    SELECT id FROM transactions WHERE phone = ? ORDER BY created_at DESC LIMIT 1
-  `).get(phone);
-  if (!last) return false;
-  db.prepare(`DELETE FROM transactions WHERE id = ?`).run(last.id);
+  const data = loadData();
+  const userTxs = data.transactions
+    .filter(t => t.phone === phone)
+    .sort((a, b) => b.created_at.localeCompare(a.created_at));
+
+  if (userTxs.length === 0) return false;
+
+  const lastId = userTxs[0].id;
+  data.transactions = data.transactions.filter(t => t.id !== lastId);
+  saveData(data);
   return true;
 }
 
 export function setBudget(phone, category, limit) {
-  const stmt = db.prepare(`
-    INSERT INTO budgets (phone, category, monthly_limit)
-    VALUES (?, ?, ?)
-    ON CONFLICT(phone, category) DO UPDATE SET monthly_limit = excluded.monthly_limit
-  `);
-  return stmt.run(phone, category, limit);
+  const data = loadData();
+  const existing = data.budgets.find(b => b.phone === phone && b.category === category);
+  if (existing) {
+    existing.monthly_limit = limit;
+  } else {
+    data.budgets.push({ phone, category, monthly_limit: limit });
+  }
+  saveData(data);
 }
 
 export function getBudgets(phone) {
-  const stmt = db.prepare(`SELECT * FROM budgets WHERE phone = ?`);
-  return stmt.all(phone);
+  const data = loadData();
+  return data.budgets.filter(b => b.phone === phone);
 }
-
-export default db;
